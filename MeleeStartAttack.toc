@@ -2,6 +2,7 @@
 ## Title: Melee Start Attack
 ## Notes: Starts melee auto-attack when supported Paladin, Warrior, or Shaman abilities are attempted.
 ## Author: Local
-## Version: 1.1.0
+## Version: 1.1.2
+## SavedVariables: MeleeStartAttackDB
 
 MeleeStartAttack.lua
