@@ -91,25 +91,48 @@ local function LearnStartAttackIcon(texture)
     return true
 end
 
--- Keep the original lightweight Warrior Start Attack behavior. AttackTarget()
--- toggles, so check the normal Attack action first and retain combat state as
--- a fallback for players who do not put Attack on an action bar.
+-- AttackTarget() toggles. When the normal Attack action is on an action bar,
+-- use its actual state for a reliable and inexpensive start/stop check. If it
+-- is absent, retain the original combat-state fallback behavior.
 local attackActive = false
+local attackActionSlot = nil
 
-local function IsAutoAttacking()
+local function GetAttackActionSlot()
+    if attackActionSlot and IsAttackAction(attackActionSlot) then
+        return attackActionSlot
+    end
+
     local actionSlot = 1
     while actionSlot <= 120 do
         if IsAttackAction(actionSlot) then
-            if IsCurrentAction(actionSlot) then
-                return true
-            end
+            attackActionSlot = actionSlot
+            return actionSlot
         end
         actionSlot = actionSlot + 1
     end
+
+    attackActionSlot = nil
+    return nil
+end
+
+local function IsAutoAttacking()
+    local attackSlot = GetAttackActionSlot()
+    if attackSlot then
+        return IsCurrentAction(attackSlot)
+    end
+
     return attackActive
 end
 
-local function StartAttackIfPossible()
+local function GetAttackModeText()
+    local attackSlot = GetAttackActionSlot()
+    if attackSlot then
+        return "Attack-action mode (slot " .. attackSlot .. ")"
+    end
+    return "fallback mode (no Attack action found on an action bar)"
+end
+
+local function StartAutoAttack()
     if UnitExists("target") and not UnitIsDead("target")
        and UnitCanAttack("player", "target") and not IsAutoAttacking() then
         AttackTarget()
@@ -117,7 +140,7 @@ local function StartAttackIfPossible()
     end
 end
 
-local function StopAttackIfActive()
+local function StopAutoAttack()
     if IsAutoAttacking() then
         AttackTarget()
     end
@@ -181,9 +204,9 @@ UseAction = function(actionSlot, checkCursor, onSelf)
             LearnStartAttackIcon(texture)
         end
         if IconIsInList(texture, stopAttackIcons) then
-            StopAttackIfActive()
+            StopAutoAttack()
         elseif IsStartAttackIcon(texture) then
-            StartAttackIfPossible()
+            StartAutoAttack()
         end
     end
     return originalUseAction(actionSlot, checkCursor, onSelf)
@@ -196,9 +219,9 @@ CastSpell = function(spellSlot, bookType)
             LearnStartAttackIcon(GetSpellTexture(spellSlot, bookType))
         end
         if SpellSlotHasIcon(spellSlot, bookType, stopAttackIcons) then
-            StopAttackIfActive()
+            StopAutoAttack()
         elseif SpellSlotHasIcon(spellSlot, bookType, startAttackIcons) then
-            StartAttackIfPossible()
+            StartAutoAttack()
         end
     end
     return originalCastSpell(spellSlot, bookType)
@@ -208,9 +231,9 @@ local originalCastSpellByName = CastSpellByName
 CastSpellByName = function(spellName, onSelf)
     if enabled then
         if SpellNameHasIcon(spellName, stopAttackIcons) then
-            StopAttackIfActive()
+            StopAutoAttack()
         elseif SpellNameHasIcon(spellName, startAttackIcons) then
-            StartAttackIfPossible()
+            StartAutoAttack()
         end
     end
     return originalCastSpellByName(spellName, onSelf)
@@ -238,11 +261,23 @@ SlashCmdList["MELEESTARTATTACK"] = function(message)
         return
     end
 
-    if enabled then
+    if message == "status" then
+        if enabled then
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack enabled:|r " .. GetAttackModeText() .. ".")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Melee Start Attack disabled:|r " .. GetAttackModeText() .. ".")
+        end
+    elseif enabled then
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack enabled.|r")
     else
         DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Melee Start Attack disabled.|r")
     end
 end
+
+SLASH_STARTAUTOATTACK1 = "/start_auto_attack"
+SlashCmdList["STARTAUTOATTACK"] = StartAutoAttack
+
+SLASH_STOPAUTOATTACK1 = "/stop_auto_attack"
+SlashCmdList["STOPAUTOATTACK"] = StopAutoAttack
 
 DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack loaded.|r")
