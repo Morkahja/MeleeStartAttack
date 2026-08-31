@@ -28,6 +28,13 @@ At character select, enable **Melee Start Attack** in the AddOns list.
 - `/meleeattack off` or `/msa off` — disable auto-attack triggering.
 - `/meleeattack` or `/msa` — toggle it.
 - `/meleeattack status` — display whether it is enabled and whether it is using Attack-action mode or fallback mode.
-- `/meleeattack learn` or `/msa learn` — add the next action-bar ability you press. Use this for custom abilities whose icon is not listed, such as Lightning Strike if your client uses a different icon. The learned icon is saved for future logins.
+- `/meleeattack learn` or `/msa learn` — add the next ability you press as a start-attack ability.
+- `/msa learn start` — same as `/msa learn`.
+- `/msa learn stop` — add the next ability you press as a stop-attack ability.
+- `/msa list` — show learned abilities for your current class.
+- `/msa unlearn <spell name>` — remove one learned ability from your current class.
+- `/msa reset` — remove all learned abilities for your current class.
+
+Learned abilities are saved separately for each class with their icon, client-localized spell name, and start/stop behavior. They keep working if you move the ability to another action-bar slot.
 - `/start_auto_attack` — start auto-attack if it is not already active; useful in macros.
 - `/stop_auto_attack` — stop auto-attack if it is active; useful in macros.

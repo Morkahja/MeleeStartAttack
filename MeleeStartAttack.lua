@@ -46,11 +46,33 @@ local startAttackIcons = {
 -- Enabled by default on every login/reload.
 local enabled = true
 
--- Stores icons learned from the player's own client. This is useful for
--- custom OctoWoW abilities whose internal icon path is not documented.
-MeleeStartAttackDB = MeleeStartAttackDB or {}
-MeleeStartAttackDB.customStartIcons = MeleeStartAttackDB.customStartIcons or {}
-local learnNextAction = false
+-- Stores learned abilities by class. An entry contains the internal icon, the
+-- spell name as shown by this client, and whether it starts or stops attack.
+if type(MeleeStartAttackDB) ~= "table" then
+    MeleeStartAttackDB = {}
+end
+MeleeStartAttackDB.customAbilities = MeleeStartAttackDB.customAbilities or {}
+
+-- Migrate entries saved by version 1.1.2. They retain their start behavior;
+-- use /msa learn start to replace a legacy entry with its spell name.
+if MeleeStartAttackDB.customStartIcons then
+    local class, icon
+    for class, icons in pairs(MeleeStartAttackDB.customStartIcons) do
+        if not MeleeStartAttackDB.customAbilities[class] then
+            MeleeStartAttackDB.customAbilities[class] = {}
+        end
+        for icon in pairs(icons) do
+            table.insert(MeleeStartAttackDB.customAbilities[class], {
+                icon = icon,
+                spellName = "(legacy learned icon)",
+                action = "start",
+            })
+        end
+    end
+    MeleeStartAttackDB.customStartIcons = nil
+end
+
+local learnAction = nil
 
 -- The one supported exception: Intimidating Shout stops melee swings.
 local stopAttackIcons = {
@@ -69,25 +91,94 @@ local function IconIsInList(texture, iconLists)
     return texture and iconLists[class] and iconLists[class][texture] == true
 end
 
-local function IsStartAttackIcon(texture)
-    local class = PlayerClass()
-    local customIcons = MeleeStartAttackDB.customStartIcons[class]
-    return IconIsInList(texture, startAttackIcons)
-        or (texture and customIcons and customIcons[texture] == true)
+-- Saved variables can be missing or partially written after an older addon
+-- version. Always recreate this class table before reading or writing it.
+local function GetCustomAbilities(class)
+    if type(MeleeStartAttackDB) ~= "table" then
+        MeleeStartAttackDB = {}
+    end
+    if type(MeleeStartAttackDB.customAbilities) ~= "table" then
+        MeleeStartAttackDB.customAbilities = {}
+    end
+    if class and type(MeleeStartAttackDB.customAbilities[class]) ~= "table" then
+        MeleeStartAttackDB.customAbilities[class] = {}
+    end
+    return class and MeleeStartAttackDB.customAbilities[class] or nil
 end
 
-local function LearnStartAttackIcon(texture)
+local function GetLearnedAbility(texture)
+    local class = PlayerClass()
+    local abilities = GetCustomAbilities(class)
+    local index = 1
+
+    while abilities and abilities[index] do
+        if abilities[index].icon == texture then
+            return abilities[index]
+        end
+        index = index + 1
+    end
+    return nil
+end
+
+local function IsStartAttackIcon(texture)
+    local ability = GetLearnedAbility(texture)
+    return IconIsInList(texture, startAttackIcons)
+        or (ability and ability.action == "start")
+end
+
+local function IsStopAttackIcon(texture)
+    local ability = GetLearnedAbility(texture)
+    return IconIsInList(texture, stopAttackIcons)
+        or (ability and ability.action == "stop")
+end
+
+local function FindSpellNameByIcon(texture)
+    local spellSlot = 1
+    local spellName = GetSpellName(spellSlot, BOOKTYPE_SPELL)
+
+    while spellName do
+        if GetSpellTexture(spellSlot, BOOKTYPE_SPELL) == texture then
+            return spellName
+        end
+        spellSlot = spellSlot + 1
+        spellName = GetSpellName(spellSlot, BOOKTYPE_SPELL)
+    end
+    return nil
+end
+
+local function LearnAbility(texture, spellName)
     local class = PlayerClass()
     if not texture or not class then
         return false
     end
 
-    if not MeleeStartAttackDB.customStartIcons[class] then
-        MeleeStartAttackDB.customStartIcons[class] = {}
+    spellName = spellName or FindSpellNameByIcon(texture)
+    if not spellName then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Melee Start Attack:|r could not identify that ability.")
+        return false
     end
-    MeleeStartAttackDB.customStartIcons[class][texture] = true
-    learnNextAction = false
-    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r learned " .. texture .. ".")
+
+    local abilities = GetCustomAbilities(class)
+    local action = learnAction
+    local index = 1
+    while abilities[index] do
+        if abilities[index].icon == texture then
+            abilities[index].spellName = spellName
+            abilities[index].action = action
+            learnAction = nil
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r learned " .. action .. " for " .. spellName .. ".")
+            return true
+        end
+        index = index + 1
+    end
+
+    table.insert(abilities, {
+        icon = texture,
+        spellName = spellName,
+        action = action,
+    })
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r learned " .. action .. " for " .. spellName .. ".")
+    learnAction = nil
     return true
 end
 
@@ -162,6 +253,8 @@ local function SpellSlotHasIcon(spellSlot, bookType, iconLists)
     local texture = GetSpellTexture(spellSlot, bookType)
     if iconLists == startAttackIcons then
         return IsStartAttackIcon(texture)
+    elseif iconLists == stopAttackIcons then
+        return IsStopAttackIcon(texture)
     end
     return IconIsInList(texture, iconLists)
 end
@@ -169,9 +262,9 @@ end
 -- Macro addons, including SuperMacro, may run CastSpellByName directly instead
 -- of calling UseAction. Resolve the localized name through the spellbook, then
 -- match its internal (language-independent) icon.
-local function SpellNameHasIcon(spellName, iconLists)
+local function FindSpellSlotByName(spellName)
     if not spellName then
-        return false
+        return nil
     end
 
     local baseName = string.gsub(spellName, "%s*%b()$", "")
@@ -180,18 +273,17 @@ local function SpellNameHasIcon(spellName, iconLists)
 
     while knownName do
         if knownName == baseName then
-            if learnNextAction and iconLists == startAttackIcons then
-                LearnStartAttackIcon(GetSpellTexture(spellSlot, BOOKTYPE_SPELL))
-            end
-            if SpellSlotHasIcon(spellSlot, BOOKTYPE_SPELL, iconLists) then
-                return true
-            end
+            return spellSlot
         end
         spellSlot = spellSlot + 1
         knownName = GetSpellName(spellSlot, BOOKTYPE_SPELL)
     end
+    return nil
+end
 
-    return false
+local function SpellNameHasIcon(spellName, iconLists)
+    local spellSlot = FindSpellSlotByName(spellName)
+    return spellSlot and SpellSlotHasIcon(spellSlot, BOOKTYPE_SPELL, iconLists)
 end
 
 -- Runs before mana, rage, or cooldown validation. Vanilla 1.12 action bars
@@ -200,10 +292,10 @@ local originalUseAction = UseAction
 UseAction = function(actionSlot, checkCursor, onSelf)
     if enabled then
         local texture = GetActionTexture(actionSlot)
-        if learnNextAction then
-            LearnStartAttackIcon(texture)
+        if learnAction then
+            LearnAbility(texture)
         end
-        if IconIsInList(texture, stopAttackIcons) then
+        if IsStopAttackIcon(texture) then
             StopAutoAttack()
         elseif IsStartAttackIcon(texture) then
             StartAutoAttack()
@@ -215,8 +307,8 @@ end
 local originalCastSpell = CastSpell
 CastSpell = function(spellSlot, bookType)
     if enabled then
-        if learnNextAction then
-            LearnStartAttackIcon(GetSpellTexture(spellSlot, bookType))
+        if learnAction then
+            LearnAbility(GetSpellTexture(spellSlot, bookType), GetSpellName(spellSlot, bookType))
         end
         if SpellSlotHasIcon(spellSlot, bookType, stopAttackIcons) then
             StopAutoAttack()
@@ -230,6 +322,12 @@ end
 local originalCastSpellByName = CastSpellByName
 CastSpellByName = function(spellName, onSelf)
     if enabled then
+        if learnAction then
+            local spellSlot = FindSpellSlotByName(spellName)
+            if spellSlot then
+                LearnAbility(GetSpellTexture(spellSlot, BOOKTYPE_SPELL), GetSpellName(spellSlot, BOOKTYPE_SPELL))
+            end
+        end
         if SpellNameHasIcon(spellName, stopAttackIcons) then
             StopAutoAttack()
         elseif SpellNameHasIcon(spellName, startAttackIcons) then
@@ -241,27 +339,80 @@ end
 
 SLASH_MELEESTARTATTACK1 = "/meleeattack"
 SLASH_MELEESTARTATTACK2 = "/msa"
-SlashCmdList["MELEESTARTATTACK"] = function(message)
-    message = string.lower(message or "")
 
-    if message == "on" then
-        enabled = true
-    elseif message == "off" then
-        enabled = false
-    elseif message == "toggle" or message == "" then
-        enabled = not enabled
-    elseif message == "status" then
-        -- Do not change the current setting.
-    elseif message == "learn" then
-        learnNextAction = true
-        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r press the ability you want to add.")
-        return
-    else
-        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r /msa on, off, toggle, status, or learn")
+local function ListLearnedAbilities()
+    local class = PlayerClass()
+    local abilities = GetCustomAbilities(class)
+    local index = 1
+
+    if not abilities or not abilities[index] then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r no learned abilities for " .. class .. ".")
         return
     end
 
-    if message == "status" then
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack learned abilities for " .. class .. ":|r")
+    while abilities[index] do
+        DEFAULT_CHAT_FRAME:AddMessage("  " .. abilities[index].action .. ": " .. abilities[index].spellName)
+        index = index + 1
+    end
+end
+
+local function UnlearnAbility(spellName)
+    local class = PlayerClass()
+    local abilities = GetCustomAbilities(class)
+    local wantedName = string.lower(spellName or "")
+    local index = 1
+
+    while abilities and abilities[index] do
+        if string.lower(abilities[index].spellName) == wantedName then
+            table.remove(abilities, index)
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r removed " .. spellName .. ".")
+            return
+        end
+        index = index + 1
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Melee Start Attack:|r no learned ability named " .. spellName .. ".")
+end
+
+SlashCmdList["MELEESTARTATTACK"] = function(message)
+    local rawMessage = message or ""
+    local command = string.lower(rawMessage)
+    local _, _, unlearnName = string.find(rawMessage, "^%s*[Uu][Nn][Ll][Ee][Aa][Rr][Nn]%s+(.+)%s*$")
+
+    if command == "on" then
+        enabled = true
+    elseif command == "off" then
+        enabled = false
+    elseif command == "toggle" or command == "" then
+        enabled = not enabled
+    elseif command == "status" then
+        -- Do not change the current setting.
+    elseif command == "learn" or command == "learn start" then
+        learnAction = "start"
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r press the ability that should start auto-attack.")
+        return
+    elseif command == "learn stop" then
+        learnAction = "stop"
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r press the ability that should stop auto-attack.")
+        return
+    elseif command == "list" then
+        ListLearnedAbilities()
+        return
+    elseif unlearnName then
+        UnlearnAbility(unlearnName)
+        return
+    elseif command == "reset" then
+        local class = PlayerClass()
+        MeleeStartAttackDB.customAbilities = MeleeStartAttackDB.customAbilities or {}
+        MeleeStartAttackDB.customAbilities[class] = {}
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r removed all learned abilities for " .. PlayerClass() .. ".")
+        return
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack:|r /msa on, off, toggle, status, learn, list, unlearn <spell>, or reset")
+        return
+    end
+
+    if command == "status" then
         if enabled then
             DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Melee Start Attack enabled:|r " .. GetAttackModeText() .. ".")
         else
