@@ -39,7 +39,7 @@ local startAttackIcons = {
         ["Interface\\Icons\\Spell_Fire_FlameShock"] = true,
         ["Interface\\Icons\\Spell_Frost_FrostShock"] = true,
         ["Interface\\Icons\\Ability_Shaman_Stormstrike"] = true,
-        ["Interface\\Icons\\Ability_ThunderClap"] = true, -- Lightning Strike (OctoWoW)
+        ["Interface\\Icons\\Ability_ThunderClap"] = true, -- Lightning Strike (custom ability)
     },
 }
 
